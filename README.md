@@ -98,9 +98,71 @@ All responses follow the consistent JSON format:
 
 ## Screenshots
 
-> Add 2 screenshots of the running application in `docs/screenshots/` once connected to MongoDB Atlas:
-> 1. `docs/screenshots/dashboard.png` — Dashboard with Statistics Cards, Filters, and Book Catalog
-> 2. `docs/screenshots/loan-history.png` — Book Details & Loan History with Status/Overdue Badges and Return Action
+### 1. Library Dashboard
 
+![Library Dashboard](docs/screenshots/dashboard.png)
+
+### 2. Book Details and Loan History
+
+![Book Details and Loan History](docs/screenshots/loan-history.png)
 ![Dashboard](docs/screenshots/dashboard.png)
 ![Book Details and Loan History](docs/screenshots/loan-history.png)
+
+## Key Features
+
+- Add, view, edit and delete library books.
+- Validate ISBN numbers (10 or 13 digits).
+- Automatically generate unique book codes by category.
+- Prevent duplicate ISBN entries.
+- Track total and available book copies.
+- Search books by title or author.
+- Filter books by category and availability.
+- Display books with pagination (5 books per page).
+- Issue books to library members.
+- Automatically calculate 14-day due dates.
+- Process book returns and calculate late fines at ₹5 per day.
+- Display loan history and overdue status.
+- Prevent deletion of books with active loans.
+- Display library statistics through backend APIs.
+- Responsive interface for desktop and mobile devices.
+- Store application data in MongoDB Atlas.
+## Technology Stack
+
+### Frontend
+- React.js
+- Vite
+- Tailwind CSS
+- JavaScript
+
+### Backend
+- Node.js
+- Express.js
+- Mongoose
+
+### Database
+- MongoDB Atlas
+
+### Testing
+- Node.js test runner
+- API tests
+## Environment Variables
+
+### Backend
+
+Create a `backend/.env` file:
+
+```env
+PORT=5000
+MONGO_URI=your_mongodb_atlas_connection_string
+CLIENT_ORIGIN=http://localhost:5173
+```
+
+### Frontend
+
+Create a `frontend/.env` file:
+
+```env
+VITE_API_URL=http://localhost:5000/api
+```
+
+**Security Note:** Use test or dummy database credentials when submitting the project to GitHub. Never publish personal or production passwords.
