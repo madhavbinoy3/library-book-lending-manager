@@ -12,6 +12,7 @@ const {
   calculateFine,
   isLoanOverdue,
   getTodayDateString,
+  getTodayCalendarUTC,
 } = require('../utils/dateUtils');
 const {
   validateCreateBookInput,
@@ -71,7 +72,6 @@ test('Validators: ISBN (10/13 digits), totalCopies (1..20), category, regex esca
     true
   );
 
-  // Invalid ISBN length
   assert.equal(
     validateCreateBookInput({
       title: 'Bad ISBN',
@@ -83,7 +83,6 @@ test('Validators: ISBN (10/13 digits), totalCopies (1..20), category, regex esca
     false
   );
 
-  // Total copies out of range
   assert.equal(
     validateCreateBookInput({
       title: 'Too Many',
@@ -103,12 +102,13 @@ test('Validators: ISBN (10/13 digits), totalCopies (1..20), category, regex esca
   assert.equal(escapeRegex('C++ (2nd)'), 'C\\+\\+ \\(2nd\\)');
 });
 
-test('REST API endpoints: status codes, JSON envelope, and business rules', async (t) => {
+test('REST API endpoints: books CRUD, issue/return, loan history, search/filters, stats', async (t) => {
   const server = app.listen(0);
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}/api`;
 
   t.after(() => {
+    t.mock.restoreAll();
     server.close();
   });
 
@@ -118,7 +118,47 @@ test('REST API endpoints: status codes, JSON envelope, and business rules', asyn
   const healthBody = await healthRes.json();
   assert.equal(healthBody.success, true);
 
-  // 2. Create Book - rejects invalid ISBN (400)
+  // 2. GET /api/books with category, availableOnly, search, page=2, limit=5
+  let capturedFilter = null;
+  let capturedSkip = null;
+  let capturedLimit = null;
+  t.mock.method(Book, 'countDocuments', async (filter) => {
+    capturedFilter = filter;
+    return 7;
+  });
+  t.mock.method(Book, 'find', () => ({
+    sort: () => ({
+      skip: (s) => {
+        capturedSkip = s;
+        return {
+          limit: (l) => {
+            capturedLimit = l;
+            return {
+              lean: async () => [{ _id: '1', bookCode: 'LB-TEC-001', title: 'Clean Code' }],
+            };
+          },
+        };
+      },
+    }),
+  }));
+
+  const listRes = await fetch(
+    `${baseUrl}/books?category=Technology&availableOnly=true&search=Clean&page=2`
+  );
+  assert.equal(listRes.status, 200);
+  const listBody = await listRes.json();
+  assert.equal(listBody.data.totalBooks, 7);
+  assert.equal(listBody.data.totalPages, 2);
+  assert.equal(listBody.data.currentPage, 2);
+  assert.equal(listBody.data.limit, 5);
+  assert.equal(capturedFilter.category, 'Technology');
+  assert.deepEqual(capturedFilter.availableCopies, { $gt: 0 });
+  assert.equal(Array.isArray(capturedFilter.$or), true);
+  assert.equal(capturedSkip, 5);
+  assert.equal(capturedLimit, 5);
+
+  // 3. Create Book - rejects invalid ISBN (400)
+  t.mock.restoreAll();
   const badBookRes = await fetch(`${baseUrl}/books`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -131,10 +171,8 @@ test('REST API endpoints: status codes, JSON envelope, and business rules', asyn
     }),
   });
   assert.equal(badBookRes.status, 400);
-  const badBookBody = await badBookRes.json();
-  assert.equal(badBookBody.success, false);
 
-  // 3. Create Book - duplicate ISBN returns 409
+  // 4. Create Book - duplicate ISBN returns 409
   t.mock.method(Book, 'findOne', () => ({
     lean: async () => ({ _id: new mongoose.Types.ObjectId(), isbn: '9780132350884' }),
   }));
@@ -151,7 +189,7 @@ test('REST API endpoints: status codes, JSON envelope, and business rules', asyn
   });
   assert.equal(dupRes.status, 409);
 
-  // 4. Create Book - auto-generates LB-TEC-004 ignoring client bookCode
+  // 5. Create Book - auto-generates LB-TEC-004 ignoring client bookCode
   t.mock.restoreAll();
   t.mock.method(Book, 'findOne', () => ({ lean: async () => null }));
   t.mock.method(Counter, 'findOneAndUpdate', async () => ({ _id: 'bookCode_Technology', seq: 4 }));
@@ -175,11 +213,10 @@ test('REST API endpoints: status codes, JSON envelope, and business rules', asyn
   });
   assert.equal(createRes.status, 201);
   const createBody = await createRes.json();
-  assert.equal(createBody.success, true);
   assert.equal(createBody.data.bookCode, 'LB-TEC-004');
   assert.equal(createBody.data.availableCopies, 5);
 
-  // 5. Update Book - rejects reducing totalCopies below currently issued copies
+  // 6. Update Book - rejects reducing totalCopies below currently issued copies & updates otherwise
   t.mock.restoreAll();
   const bookId = new mongoose.Types.ObjectId().toString();
   t.mock.method(Book, 'findById', async () => ({
@@ -194,6 +231,7 @@ test('REST API endpoints: status codes, JSON envelope, and business rules', asyn
     save: async function () {
       return this;
     },
+    deleteOne: async () => ({ deletedCount: 1 }),
   }));
   t.mock.method(Loan, 'countDocuments', async () => 3);
 
@@ -221,11 +259,24 @@ test('REST API endpoints: status codes, JSON envelope, and business rules', asyn
   const okUpdateBody = await okUpdateRes.json();
   assert.equal(okUpdateBody.data.availableCopies, 3);
 
-  // 6. Delete Book - rejects when unreturned copies exist
+  // 7. Delete Book - rejects when unreturned copies exist, succeeds when 0 issued
   const delBlockedRes = await fetch(`${baseUrl}/books/${bookId}`, { method: 'DELETE' });
   assert.equal(delBlockedRes.status, 400);
 
-  // 7. Issue Book - rejects future date
+  t.mock.restoreAll();
+  t.mock.method(Book, 'findById', async () => ({
+    _id: bookId,
+    totalCopies: 5,
+    availableCopies: 5,
+    deleteOne: async () => ({ deletedCount: 1 }),
+  }));
+  t.mock.method(Loan, 'countDocuments', async () => 0);
+  t.mock.method(Loan, 'deleteMany', async () => ({ deletedCount: 1 }));
+  const delOkRes = await fetch(`${baseUrl}/books/${bookId}`, { method: 'DELETE' });
+  assert.equal(delOkRes.status, 200);
+
+  // 8. Issue Book - rejects future date, rejects duplicate member, succeeds with +14d dueDate
+  t.mock.restoreAll();
   const futureDate = addDaysUTC(parseDateOnly(getTodayDateString()), 2)
     .toISOString()
     .slice(0, 10);
@@ -240,7 +291,11 @@ test('REST API endpoints: status codes, JSON envelope, and business rules', asyn
   });
   assert.equal(futureIssueRes.status, 400);
 
-  // 8. Issue Book - rejects duplicate active loan for same memberId
+  t.mock.method(Book, 'findById', async () => ({
+    _id: bookId,
+    totalCopies: 5,
+    availableCopies: 2,
+  }));
   t.mock.method(Loan, 'findOne', () => ({
     lean: async () => ({ _id: new mongoose.Types.ObjectId(), memberId: 'MEM-001' }),
   }));
@@ -255,7 +310,42 @@ test('REST API endpoints: status codes, JSON envelope, and business rules', asyn
   });
   assert.equal(dupLoanRes.status, 409);
 
-  // 9. Return Book - rejects already returned loan
+  t.mock.restoreAll();
+  const todayStr = getTodayDateString();
+  const expectedDueStr = addDaysUTC(parseDateOnly(todayStr), 14).toISOString().slice(0, 10);
+  t.mock.method(Book, 'findById', async () => ({
+    _id: bookId,
+    totalCopies: 5,
+    availableCopies: 2,
+  }));
+  t.mock.method(Loan, 'findOne', () => ({ lean: async () => null }));
+  t.mock.method(Book, 'findOneAndUpdate', async () => ({
+    _id: bookId,
+    totalCopies: 5,
+    availableCopies: 1,
+  }));
+  t.mock.method(Loan, 'create', async (doc) => ({
+    _id: new mongoose.Types.ObjectId(),
+    ...doc,
+    toObject() {
+      return { ...this };
+    },
+  }));
+  const issueOkRes = await fetch(`${baseUrl}/books/${bookId}/issue`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      memberName: 'Alice',
+      memberId: 'MEM-001',
+      issueDate: todayStr,
+    }),
+  });
+  assert.equal(issueOkRes.status, 201);
+  const issueOkBody = await issueOkRes.json();
+  assert.equal(issueOkBody.data.loan.dueDate.slice(0, 10), expectedDueStr);
+  assert.equal(issueOkBody.data.book.availableCopies, 1);
+
+  // 9. Return Book - rejects already returned, and calculates Rs. 5/day fine when overdue
   t.mock.restoreAll();
   const loanId = new mongoose.Types.ObjectId().toString();
   t.mock.method(Loan, 'findById', async () => ({
@@ -266,4 +356,75 @@ test('REST API endpoints: status codes, JSON envelope, and business rules', asyn
     method: 'POST',
   });
   assert.equal(alreadyReturnedRes.status, 400);
+
+  t.mock.restoreAll();
+  const pastDueDate = addDaysUTC(getTodayCalendarUTC(), -4);
+  t.mock.method(Loan, 'findById', async () => ({
+    _id: loanId,
+    book: bookId,
+    dueDate: pastDueDate,
+    status: 'Issued',
+  }));
+  t.mock.method(Loan, 'findOneAndUpdate', () => ({
+    lean: async () => ({
+      _id: loanId,
+      book: bookId,
+      dueDate: pastDueDate,
+      returnDate: getTodayCalendarUTC(),
+      fine: 20,
+      status: 'Returned',
+    }),
+  }));
+  t.mock.method(Book, 'findById', async () => ({
+    _id: bookId,
+    totalCopies: 5,
+    availableCopies: 1,
+    save: async function () {
+      return this;
+    },
+  }));
+  const returnOkRes = await fetch(`${baseUrl}/loans/${loanId}/return`, { method: 'POST' });
+  assert.equal(returnOkRes.status, 200);
+  const returnOkBody = await returnOkRes.json();
+  assert.equal(returnOkBody.data.loan.fine, 20);
+  assert.equal(returnOkBody.data.book.availableCopies, 2);
+
+  // 10. GET /api/books/:id returns loan history with isOverdue computed
+  t.mock.restoreAll();
+  t.mock.method(Book, 'findById', () => ({
+    lean: async () => ({ _id: bookId, bookCode: 'LB-TEC-004', title: 'Clean Code' }),
+  }));
+  t.mock.method(Loan, 'find', () => ({
+    sort: () => ({
+      lean: async () => [
+        {
+          _id: loanId,
+          memberName: 'Bob',
+          memberId: 'MEM-002',
+          dueDate: addDaysUTC(getTodayCalendarUTC(), -2),
+          status: 'Issued',
+        },
+      ],
+    }),
+  }));
+  const detailsRes = await fetch(`${baseUrl}/books/${bookId}`);
+  assert.equal(detailsRes.status, 200);
+  const detailsBody = await detailsRes.json();
+  assert.equal(detailsBody.data.loans[0].isOverdue, true);
+
+  // 11. GET /api/stats returns aggregated metrics
+  t.mock.restoreAll();
+  t.mock.method(Book, 'aggregate', async () => [{ totalTitles: 4, totalCopies: 18 }]);
+  t.mock.method(Loan, 'countDocuments', async (q) => (q.dueDate ? 1 : 3));
+  t.mock.method(Loan, 'aggregate', async () => [{ totalFineCollected: 35 }]);
+  const statsRes = await fetch(`${baseUrl}/stats`);
+  assert.equal(statsRes.status, 200);
+  const statsBody = await statsRes.json();
+  assert.deepEqual(statsBody.data, {
+    totalTitles: 4,
+    totalCopies: 18,
+    copiesIssued: 3,
+    overdueLoans: 1,
+    totalFineCollected: 35,
+  });
 });

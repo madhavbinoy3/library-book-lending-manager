@@ -20,6 +20,7 @@ import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
 
 export default function DashboardPage({
   refreshSignal,
+  bookAddedSignal,
   onMutationSuccess,
   onOpenAddBook,
   showToast,
@@ -72,6 +73,12 @@ export default function DashboardPage({
       setLoading(false);
     }
   }, [page, category, availableOnly, debouncedSearch]);
+
+  useEffect(() => {
+    if (bookAddedSignal > 0) {
+      setPage(1);
+    }
+  }, [bookAddedSignal]);
 
   useEffect(() => {
     fetchBooks();

@@ -5,9 +5,9 @@ const mongoose = require('mongoose');
  */
 async function connectDB() {
   const uri = process.env.MONGO_URI;
-  if (!uri || uri.includes('<username>') || uri.includes('<password>')) {
-    console.warn(
-      'Warning: MONGO_URI is not configured with real credentials yet. Update backend/.env with your MongoDB Atlas URI.'
+  if (!uri || uri.includes('<username>') || uri.includes('<password>') || uri.includes('<cluster-url>')) {
+    throw new Error(
+      'MONGO_URI is not configured with real MongoDB Atlas credentials. Update backend/.env with your Atlas connection string.'
     );
   }
 

@@ -20,6 +20,7 @@ export default function App() {
   const [stats, setStats] = useState(DEFAULT_STATS);
   const [statsLoading, setStatsLoading] = useState(true);
   const [refreshSignal, setRefreshSignal] = useState(0);
+  const [bookAddedSignal, setBookAddedSignal] = useState(0);
   const [isAddBookOpen, setIsAddBookOpen] = useState(false);
   const [toast, setToast] = useState(null);
 
@@ -69,6 +70,7 @@ export default function App() {
               element={
                 <DashboardPage
                   refreshSignal={refreshSignal}
+                  bookAddedSignal={bookAddedSignal}
                   onMutationSuccess={handleMutationSuccess}
                   onOpenAddBook={() => setIsAddBookOpen(true)}
                   showToast={showToast}
@@ -92,6 +94,7 @@ export default function App() {
           onClose={() => setIsAddBookOpen(false)}
           onSuccess={(_, message) => {
             showToast(message || 'Book added successfully', 'success');
+            setBookAddedSignal((s) => s + 1);
             handleMutationSuccess();
           }}
         />
